@@ -112,18 +112,22 @@ func (e *encoded) semantics() {
 type tokenType string
 
 const (
-	tokNamespace tokenType = "namespace"
-	tokType      tokenType = "type"
-	tokInterface tokenType = "interface"
-	tokParameter tokenType = "parameter"
-	tokVariable  tokenType = "variable"
-	tokMember    tokenType = "member"
-	tokFunction  tokenType = "function"
-	tokKeyword   tokenType = "keyword"
-	tokComment   tokenType = "comment"
-	tokString    tokenType = "string"
-	tokNumber    tokenType = "number"
-	tokOperator  tokenType = "operator"
+	tokNamespace  tokenType = "namespace"
+	tokStruct     tokenType = "struct"
+	tokEnum       tokenType = "enum"
+	tokEnumMember tokenType = "enumMember"
+	tokInterface  tokenType = "interface"
+	tokType       tokenType = "type"
+	tokParameter  tokenType = "parameter"
+	tokVariable   tokenType = "variable"
+	tokProperty   tokenType = "property"
+	tokMember     tokenType = "member"
+	tokFunction   tokenType = "function"
+	tokKeyword    tokenType = "keyword"
+	tokComment    tokenType = "comment"
+	tokString     tokenType = "string"
+	tokNumber     tokenType = "number"
+	tokOperator   tokenType = "operator"
 )
 
 func (e *encoded) token(start token.Pos, leng int, typ tokenType, mods []string) {
@@ -211,27 +215,17 @@ func (e *encoded) inspector(n ast.Node) bool {
 		return true
 	}
 	e.stack = append(e.stack, n)
+
 	switch x := n.(type) {
 	case *ast.ArrayType:
 	case *ast.AssignStmt:
 		e.token(x.TokPos, len(x.Tok.String()), tokOperator, nil)
 	case *ast.BasicLit:
-		// if it extends across a line, skip it
-		// better would be to mark each line as string TODO(pjw)
-		if strings.Contains(x.Value, "\n") {
-			break
-		}
-		ln := len(x.Value)
-		what := tokNumber
-		if x.Kind == token.STRING {
-			what = tokString
-			if _, ok := e.stack[len(e.stack)-2].(*ast.Field); ok {
-				// struct tags (this is probably pointless, as the
-				// TextMate grammar will treat all the other comments the same)
-				what = tokComment
-			}
-		}
-		e.token(x.Pos(), ln, what, nil)
+		// The TextMate grammar is arguably a better tool for this particular job,
+		// since it can express more nuance -- a different shade for delimiting
+		// quotes, contextual highlighting for `fmt` verbs, regexp syntax, escape
+		// codes, float punctuation, hex prefixes, exponents... etc. ad nauseam.
+		// Semantic tokens stampede over all of that.
 	case *ast.BinaryExpr:
 		e.token(x.OpPos, len(x.Op.String()), tokOperator, nil)
 	case *ast.BlockStmt:
@@ -354,10 +348,11 @@ func (e *encoded) inspector(n ast.Node) bool {
 	}
 	return true
 }
+
 func (e *encoded) ident(x *ast.Ident) {
 	def := e.ti.Defs[x]
 	if def != nil {
-		what, mods := e.definitionFor(x)
+		what, mods := e.definitionFor(x, def)
 		if what != "" {
 			e.token(x.Pos(), len(x.String()), what, mods)
 		}
@@ -373,6 +368,7 @@ func (e *encoded) ident(x *ast.Ident) {
 		mods := []string{"readonly"}
 		tt := y.Type()
 		if _, ok := tt.(*types.Basic); ok {
+			mods = append(mods, "defaultLibrary")
 			e.token(x.Pos(), len(x.String()), tokVariable, mods)
 			break
 		}
@@ -381,7 +377,7 @@ func (e *encoded) ident(x *ast.Ident) {
 				e.unexpected(fmt.Sprintf("iota:%T", ttx))
 			}
 			if _, ok := ttx.Underlying().(*types.Basic); ok {
-				e.token(x.Pos(), len(x.String()), tokVariable, mods)
+				e.token(x.Pos(), len(x.String()), tokEnumMember, mods)
 				break
 			}
 			e.unexpected(fmt.Sprintf("%q/%T", x.String(), tt))
@@ -394,13 +390,29 @@ func (e *encoded) ident(x *ast.Ident) {
 		// nothing to map it to
 	case *types.Nil:
 		// nil is a predeclared identifier
-		e.token(x.Pos(), len("nil"), tokVariable, []string{"readonly"})
+		e.token(x.Pos(), len("nil"), tokVariable, []string{"readonly", "defaultLibrary"})
 	case *types.PkgName:
 		e.token(x.Pos(), len(x.Name), tokNamespace, nil)
 	case *types.TypeName:
-		e.token(x.Pos(), len(x.String()), tokType, nil)
+		switch t := use.Type().(type) {
+		case *types.Basic:
+			e.token(x.Pos(), len(x.String()), tokType, []string{"defaultLibrary"})
+		case *types.Named:
+			switch use.Type().Underlying().(type) {
+			case *types.Struct:
+				e.token(x.Pos(), len(x.String()), tokStruct, nil)
+			case *types.Interface:
+				e.token(x.Pos(), len(x.String()), tokInterface, nil)
+			case *types.Basic:
+				e.token(x.Pos(), len(x.String()), tokEnum, nil)
+			default:
+				e.token(x.Pos(), len(x.String()), tokType, nil)
+			}
+		default:
+			event.Log(e.ctx, fmt.Sprintf("NOT IMPLEMENTED: %v :: %T", x.Name, t))
+		}
 	case *types.Var:
-		e.token(x.Pos(), len(x.Name), tokVariable, nil)
+		// TODO - TM grammar can handle other identifiers for now
 	default:
 		// replace with panic after extensive testing
 		if use == nil {
@@ -415,7 +427,7 @@ func (e *encoded) ident(x *ast.Ident) {
 	}
 }
 
-func (e *encoded) definitionFor(x *ast.Ident) (tokenType, []string) {
+func (e *encoded) definitionFor(x *ast.Ident, def types.Object) (tokenType, []string) {
 	mods := []string{"definition"}
 	for i := len(e.stack) - 1; i >= 0; i-- {
 		s := e.stack[i]
@@ -445,9 +457,30 @@ func (e *encoded) definitionFor(x *ast.Ident) (tokenType, []string) {
 			// if x < ... < FieldList < FuncType < FuncDecl, this is a param
 			return tokParameter, mods
 		case *ast.InterfaceType:
-			return tokMember, mods
+			for _, method := range y.Methods.List {
+				for _, name := range method.Names {
+					if x.Name == name.Name {
+						return tokMember, mods
+					}
+				}
+			}
+			return tokParameter, mods
 		case *ast.TypeSpec:
-			return tokType, mods
+			// if x.Name == y.Name, x _is_ the type being declared
+			if x.Name == y.Name.Name {
+				switch def.Type().Underlying().(type) {
+				case *types.Struct:
+					return tokStruct, mods
+				case *types.Interface:
+					return tokInterface, mods
+				case *types.Basic:
+					return tokEnum, mods
+				default:
+					return tokType, mods
+				}
+			}
+			// Otherwise, this is a field declaration
+			return tokProperty, mods
 		}
 	}
 	// panic after extensive testing
