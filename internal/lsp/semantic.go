@@ -368,7 +368,9 @@ func (e *encoded) ident(x *ast.Ident) {
 		mods := []string{"readonly"}
 		tt := y.Type()
 		if _, ok := tt.(*types.Basic); ok {
-			mods = append(mods, "defaultLibrary")
+			if x.Name == "true" || x.Name == "false" {
+				mods = append(mods, "defaultLibrary")
+			}
 			e.token(x.Pos(), len(x.String()), tokVariable, mods)
 			break
 		}
