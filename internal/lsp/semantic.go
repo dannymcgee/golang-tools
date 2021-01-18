@@ -217,124 +217,12 @@ func (e *encoded) inspector(n ast.Node) bool {
 	e.stack = append(e.stack, n)
 
 	switch x := n.(type) {
-	case *ast.ArrayType:
-	case *ast.AssignStmt:
-		e.token(x.TokPos, len(x.Tok.String()), tokOperator, nil)
-	case *ast.BasicLit:
-		// The TextMate grammar is arguably a better tool for this particular job,
-		// since it can express more nuance -- a different shade for delimiting
-		// quotes, contextual highlighting for `fmt` verbs, regexp syntax, escape
-		// codes, float punctuation, hex prefixes, exponents... etc. ad nauseam.
-		// Semantic tokens stampede over all of that.
-	case *ast.BinaryExpr:
-		e.token(x.OpPos, len(x.Op.String()), tokOperator, nil)
-	case *ast.BlockStmt:
-	case *ast.BranchStmt:
-		e.token(x.TokPos, len(x.Tok.String()), tokKeyword, nil)
-		// There's no semantic encoding for labels
-	case *ast.CallExpr:
-		if x.Ellipsis != token.NoPos {
-			e.token(x.Ellipsis, len("..."), tokOperator, nil)
-		}
-	case *ast.CaseClause:
-		iam := "case"
-		if x.List == nil {
-			iam = "default"
-		}
-		e.token(x.Case, len(iam), tokKeyword, nil)
-	case *ast.ChanType:
-		// chan | chan <- | <- chan
-		if x.Arrow == token.NoPos || x.Arrow != x.Begin {
-			e.token(x.Begin, len("chan"), tokKeyword, nil)
-			break
-		}
-		pos := e.findKeyword("chan", x.Begin+2, x.Value.Pos())
-		e.token(pos, len("chan"), tokKeyword, nil)
-	case *ast.CommClause:
-		iam := len("case")
-		if x.Comm == nil {
-			iam = len("default")
-		}
-		e.token(x.Case, iam, tokKeyword, nil)
-	case *ast.CompositeLit:
-	case *ast.DeclStmt:
-	case *ast.DeferStmt:
-		e.token(x.Defer, len("defer"), tokKeyword, nil)
-	case *ast.Ellipsis:
-		e.token(x.Ellipsis, len("..."), tokOperator, nil)
-	case *ast.EmptyStmt:
-	case *ast.ExprStmt:
-	case *ast.Field:
-	case *ast.FieldList:
-	case *ast.ForStmt:
-		e.token(x.For, len("for"), tokKeyword, nil)
-	case *ast.FuncDecl:
-	case *ast.FuncLit:
-	case *ast.FuncType:
-		if x.Func != token.NoPos {
-			e.token(x.Func, len("func"), tokKeyword, nil)
-		}
-	case *ast.GenDecl:
-		e.token(x.TokPos, len(x.Tok.String()), tokKeyword, nil)
-	case *ast.GoStmt:
-		e.token(x.Go, len("go"), tokKeyword, nil)
 	case *ast.Ident:
 		e.ident(x)
-	case *ast.IfStmt:
-		e.token(x.If, len("if"), tokKeyword, nil)
-		if x.Else != nil {
-			// x.Body.End() or x.Body.End()+1, not that it matters
-			pos := e.findKeyword("else", x.Body.End(), x.Else.Pos())
-			e.token(pos, len("else"), tokKeyword, nil)
-		}
 	case *ast.ImportSpec:
 		e.importSpec(x)
 		pop()
 		return false
-	case *ast.IncDecStmt:
-		e.token(x.TokPos, len(x.Tok.String()), tokOperator, nil)
-	case *ast.IndexExpr:
-	case *ast.InterfaceType:
-		e.token(x.Interface, len("interface"), tokKeyword, nil)
-	case *ast.KeyValueExpr:
-	case *ast.LabeledStmt:
-	case *ast.MapType:
-		e.token(x.Map, len("map"), tokKeyword, nil)
-	case *ast.ParenExpr:
-	case *ast.RangeStmt:
-		e.token(x.For, len("for"), tokKeyword, nil)
-		// x.TokPos == token.NoPos is legal (for range foo {})
-		offset := x.TokPos
-		if offset == token.NoPos {
-			offset = x.For
-		}
-		pos := e.findKeyword("range", offset, x.X.Pos())
-		e.token(pos, len("range"), tokKeyword, nil)
-	case *ast.ReturnStmt:
-		e.token(x.Return, len("return"), tokKeyword, nil)
-	case *ast.SelectStmt:
-		e.token(x.Select, len("select"), tokKeyword, nil)
-	case *ast.SelectorExpr:
-	case *ast.SendStmt:
-		e.token(x.Arrow, len("<-"), tokOperator, nil)
-	case *ast.SliceExpr:
-	case *ast.StarExpr:
-		e.token(x.Star, len("*"), tokOperator, nil)
-	case *ast.StructType:
-		e.token(x.Struct, len("struct"), tokKeyword, nil)
-	case *ast.SwitchStmt:
-		e.token(x.Switch, len("switch"), tokKeyword, nil)
-	case *ast.TypeAssertExpr:
-		if x.Type == nil {
-			pos := e.findKeyword("type", x.Lparen, x.Rparen)
-			e.token(pos, len("type"), tokKeyword, nil)
-		}
-	case *ast.TypeSpec:
-	case *ast.TypeSwitchStmt:
-		e.token(x.Switch, len("switch"), tokKeyword, nil)
-	case *ast.UnaryExpr:
-		e.token(x.OpPos, len(x.Op.String()), tokOperator, nil)
-	case *ast.ValueSpec:
 	// things we won't see
 	case *ast.BadDecl, *ast.BadExpr, *ast.BadStmt,
 		*ast.File, *ast.Package:
@@ -343,8 +231,7 @@ func (e *encoded) inspector(n ast.Node) bool {
 	case *ast.Comment, *ast.CommentGroup:
 		pop()
 		return false
-	default: // just to be super safe.
-		e.unexpected(fmt.Sprintf("failed to implement %T", x))
+	default:
 	}
 	return true
 }
@@ -368,8 +255,8 @@ func (e *encoded) ident(x *ast.Ident) {
 		mods := []string{"readonly"}
 		tt := y.Type()
 		if _, ok := tt.(*types.Basic); ok {
-			if x.Name == "true" || x.Name == "false" {
-				mods = append(mods, "defaultLibrary")
+			if x.Name == "true" || x.Name == "false" || x.Name == "iota" {
+				break
 			}
 			e.token(x.Pos(), len(x.String()), tokVariable, mods)
 			break
@@ -388,15 +275,10 @@ func (e *encoded) ident(x *ast.Ident) {
 		e.unexpected(fmt.Sprintf("%s %T %#v", x.String(), tt, tt))
 	case *types.Func:
 		e.token(x.Pos(), len(x.Name), tokFunction, nil)
-	case *types.Label:
-		// nothing to map it to
-	case *types.Nil:
-		// nil is a predeclared identifier
-		e.token(x.Pos(), len("nil"), tokVariable, []string{"readonly", "defaultLibrary"})
 	case *types.PkgName:
 		e.token(x.Pos(), len(x.Name), tokNamespace, nil)
 	case *types.TypeName:
-		switch t := use.Type().(type) {
+		switch use.Type().(type) {
 		case *types.Basic:
 			e.token(x.Pos(), len(x.String()), tokType, []string{"defaultLibrary"})
 		case *types.Named:
@@ -411,20 +293,7 @@ func (e *encoded) ident(x *ast.Ident) {
 				e.token(x.Pos(), len(x.String()), tokType, nil)
 			}
 		default:
-			event.Log(e.ctx, fmt.Sprintf("NOT IMPLEMENTED: %v :: %T", x.Name, t))
-		}
-	case *types.Var:
-		// TODO - TM grammar can handle other identifiers for now
-	default:
-		// replace with panic after extensive testing
-		if use == nil {
-			msg := fmt.Sprintf("%#v/%#v %#v %#v", x, x.Obj, e.ti.Defs[x], e.ti.Uses[x])
-			e.unexpected(msg)
-		}
-		if use.Type() != nil {
-			e.unexpected(fmt.Sprintf("%s %T/%T,%#v", x.String(), use, use.Type(), use))
-		} else {
-			e.unexpected(fmt.Sprintf("%s %T", x.String(), use))
+			e.token(x.Pos(), len(x.String()), tokType, nil)
 		}
 	}
 }
